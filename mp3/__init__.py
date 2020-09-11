@@ -20,6 +20,8 @@ resources = root / "resources"
 icon_rightarrow = Image.open(resources / "icon-rightarrow.png").convert("RGBA")
 icon_backdrop = Image.open(resources / "icon-backdrop.png").convert("RGBA")
 icon_return = Image.open(resources / "icon-return.png").convert("RGBA")
+icon_play = Image.open(resources / "icon-play.png").convert("RGBA")
+icon_stop = Image.open(resources / "icon-stop.png").convert("RGBA")
 
 
 DISPLAY_W = 240
@@ -98,7 +100,7 @@ class Track:
         return self.id3.tag.title
 
     def play(self):
-        print(self.path)
+        print(f"Playing {self.path}")
         mixer.music.load(str(self.path))
         mixer.music.play()
 
@@ -107,9 +109,11 @@ class Album:
     def __init__(self, path, cover_art_file):
         self.tracks = []
         self.current_index = 0
+        self.playing_index = None
         self.title = path.stem
-        self.art = Image.open(path / cover_art_file)
-        self.thumb = self.art.resize((DISPLAY_W // 2, DISPLAY_H // 2))
+        self.image = Image.open(path / cover_art_file).convert("RGB")
+        self.art = Image.blend(self.image.resize((DISPLAY_W, DISPLAY_H)), Image.new("RGB", (DISPLAY_W, DISPLAY_H), (0, 0, 0)), alpha=0.8)
+        self.thumb = self.image.resize((DISPLAY_W // 2, DISPLAY_H // 2))
         source = list(path.glob("*.mp3"))
         for file in list(source):
             self.tracks.append(Track(file))
@@ -117,6 +121,24 @@ class Album:
     @property
     def current_track(self):
         return self.tracks[self.current_index]
+
+    @property
+    def current_playing_track(self):
+        try:
+            return self.tracks[self.playing_index]
+        except (IndexError, TypeError):
+            return None
+
+    def play(self):
+        if self.playing_index != self.current_index:
+            self.current_track.play()
+            self.playing_index = self.current_index
+        else:
+            self.stop()
+
+    def stop(self):
+        self.playing_index = None
+        mixer.music.stop()
 
     def next(self):
         self.current_index += 1
@@ -149,6 +171,14 @@ class Library:
         self.current_index -= 1
         self.current_index %= len(self.albums)
 
+    def play(self):
+        for album in self.albums:
+            album.stop()
+        self.current_album.play()
+
+    def stop(self):
+        self.current_album.stop()
+
 
 view = "album"
 
@@ -167,8 +197,7 @@ def main():
         spi_speed_hz=80 * 1000 * 1000
     )
 
-    canvas = Image.new("RGB", (240, 240), (0, 0, 0))
-    draw = ImageDraw.Draw(canvas)
+    canvas = Image.new("RGB", (DISPLAY_W, DISPLAY_H), (0, 0, 0))
 
     music_path = root.parents[0] / "music"
     print(f"Loading music from {music_path}")
@@ -188,7 +217,10 @@ def main():
             if label == "A":
                 view = "album"
             if label == "B":
-                library.current_album.current_track.play()
+                if mixer.music.get_busy() and library.current_album.current_track == library.current_album.current_playing_track:
+                    library.stop()
+                else:
+                    library.play()
             if label == "X":
                 library.current_album.prev()
             if label == "Y":
@@ -198,6 +230,7 @@ def main():
         GPIO.add_event_detect(pin, GPIO.FALLING, handle_button, bouncetime=250)
 
     while True:
+        draw = ImageDraw.Draw(canvas)
         draw.rectangle((0, 0, DISPLAY_W, DISPLAY_H), (0, 0, 0))
 
         selected_album = library.current_index
@@ -225,20 +258,29 @@ def main():
             album = library.current_album
             selected_track = album.current_index
 
+            canvas.paste(album.art, (0, 0), None)
+
             item = 0
             offset_y = (DISPLAY_H // 2) - 12
 
             offset_y -= selected_track * 24
 
+            track_overlay = Image.new("RGBA", (DISPLAY_W, DISPLAY_H))
+            track_draw = ImageDraw.Draw(track_overlay)
+
             for track in album.tracks:
                 position_y = offset_y + item * 24
-                draw.rectangle((0, position_y, DISPLAY_W, position_y + 24), fill=(5, 5, 5) if item % 2 else (9, 9, 9))
+                track_draw.rectangle((0, position_y, DISPLAY_W, position_y + 24), fill=(0, 0, 0, 200) if item % 2 else (0, 0, 0, 180))
 
-                if track == album.current_track:
-                    draw.text((5, 1 + position_y), track.title, font=font, fill=(255, 255, 255))
+                if track == album.current_playing_track:
+                    track_draw.text((5, 1 + position_y), track.title, font=font, fill=(255, 255, 255))
+                elif track == album.current_track:
+                    track_draw.text((5, 1 + position_y), track.title, font=font, fill=(200, 200, 200))
                 else:
-                    draw.text((5, 1 + position_y), track.title, font=font, fill=(64, 64, 64))
+                    track_draw.text((5, 1 + position_y), track.title, font=font, fill=(64, 64, 64))
                 item += 1
+
+            canvas = Image.alpha_composite(canvas.convert("RGBA"), track_overlay)
 
             text_in_rect(draw, album.title, font, (0, 0, DISPLAY_W, 30), line_spacing=1.1, textcolor=(255, 255, 255))
 
@@ -250,6 +292,13 @@ def main():
 
             icon(canvas, icon_backdrop.rotate(180), (DISPLAY_W - 26, DISPLAY_H - 73), (255, 255, 255))
             icon(canvas, icon_rightarrow.rotate(-90), (DISPLAY_W - 20, DISPLAY_H - 70), (0, 0, 0))
+
+            # Play/Pause
+            icon(canvas, icon_backdrop, (0, DISPLAY_H - 73), (255, 255, 255))
+            if mixer.music.get_busy() and album.current_track == album.current_playing_track:
+                icon(canvas, icon_stop, (0, DISPLAY_H - 70), (0, 0, 0))
+            else:
+                icon(canvas, icon_play, (0, DISPLAY_H - 70), (0, 0, 0))
 
 
         display.display(canvas)
