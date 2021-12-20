@@ -4,6 +4,14 @@ A quick and dirty MP3 player for Pirate Audio.
 
 You must place your music in the "music" folder and run this package with `python3 -m mp3`.
 
+## Requirements
+
+```
+python3 -m pip install eyed3
+```
+
+## Adding Music
+
 Music must be in mp3 format, arranged into subfolders and include a `cover.jpg` or `cover.png` album art file.
 
 EG:
